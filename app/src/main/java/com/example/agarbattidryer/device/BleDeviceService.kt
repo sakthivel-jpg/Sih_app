@@ -1,0 +1,148 @@
+package com.example.agarbattidryer.device
+
+import android.annotation.SuppressLint
+import android.bluetooth.*
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import com.example.agarbattidryer.data.model.ConnectionState
+import com.example.agarbattidryer.data.model.DeviceInfo
+import com.example.agarbattidryer.data.model.DeviceStatus
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import java.util.UUID
+
+@SuppressLint("MissingPermission")
+class BleDeviceService(private val context: Context) : DeviceService {
+
+    private val SERVICE_UUID = UUID.fromString("7b7a0001-7b7a-4f8a-9a10-000000000001")
+    private val CHAR_UUID_STATUS = UUID.fromString("7b7a0002-7b7a-4f8a-9a10-000000000002")
+    private val CHAR_UUID_SENSOR = UUID.fromString("7b7a0003-7b7a-4f8a-9a10-000000000003")
+    private val CHAR_UUID_COMMAND = UUID.fromString("7b7a0004-7b7a-4f8a-9a10-000000000004")
+    private val CHAR_UUID_CONFIG = UUID.fromString("7b7a0005-7b7a-4f8a-9a10-000000000005")
+
+    private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
+    override val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+
+    private val _deviceStatus = MutableStateFlow(DeviceStatus.READY)
+    override val deviceStatus: StateFlow<DeviceStatus> = _deviceStatus.asStateFlow()
+
+    private val _temperature = MutableStateFlow(0.0f)
+    override val temperature: StateFlow<Float> = _temperature.asStateFlow()
+
+    private val _humidity = MutableStateFlow(0.0f)
+    override val humidity: StateFlow<Float> = _humidity.asStateFlow()
+
+    private val _dryingDurationSeconds = MutableStateFlow(0L)
+    override val dryingDurationSeconds: StateFlow<Long> = _dryingDurationSeconds.asStateFlow()
+
+    private val _activeDevice = MutableStateFlow<DeviceInfo?>(null)
+    override val activeDevice: StateFlow<DeviceInfo?> = _activeDevice.asStateFlow()
+
+    private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+    private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
+    private var bluetoothGatt: BluetoothGatt? = null
+
+    private var cmdCharacteristic: BluetoothGattCharacteristic? = null
+
+    override suspend fun connect(deviceId: String): Boolean {
+        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) return false
+        
+        _connectionState.value = ConnectionState.CONNECTING
+        val device = bluetoothAdapter.getRemoteDevice(deviceId)
+        
+        bluetoothGatt = device.connectGatt(context, false, gattCallback)
+        return true
+    }
+
+    override suspend fun disconnect() {
+        bluetoothGatt?.disconnect()
+        bluetoothGatt?.close()
+        bluetoothGatt = null
+        _connectionState.value = ConnectionState.DISCONNECTED
+        _activeDevice.value = null
+    }
+
+    override suspend fun startDrying(): Boolean {
+        return sendCommand("START_DRYING")
+    }
+
+    override suspend fun stopDrying(): Boolean {
+        return sendCommand("STOP_DRYING")
+    }
+    
+    private fun sendCommand(cmd: String): Boolean {
+        val gatt = bluetoothGatt ?: return false
+        val char = cmdCharacteristic ?: return false
+        char.value = cmd.toByteArray()
+        return gatt.writeCharacteristic(char)
+    }
+
+    override suspend fun getAvailableDevices(): List<DeviceInfo> {
+        return listOf(DeviceInfo("00:11:22:33:44:55", "AGARBATTI-DRYER-01"))
+    }
+
+    private val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                _connectionState.value = ConnectionState.CONNECTED
+                _activeDevice.value = DeviceInfo(gatt.device.address, gatt.device.name ?: "Unknown")
+                gatt.discoverServices()
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                _connectionState.value = ConnectionState.DISCONNECTED
+                _deviceStatus.value = DeviceStatus.ERROR
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                val service = gatt.getService(SERVICE_UUID)
+                if (service != null) {
+                    cmdCharacteristic = service.getCharacteristic(CHAR_UUID_COMMAND)
+                    val sensorChar = service.getCharacteristic(CHAR_UUID_SENSOR)
+                    val statusChar = service.getCharacteristic(CHAR_UUID_STATUS)
+                    
+                    // Enable notifications
+                    sensorChar?.let {
+                        gatt.setCharacteristicNotification(it, true)
+                        val descriptor = it.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                        if (descriptor != null) {
+                            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                            gatt.writeDescriptor(descriptor)
+                        }
+                    }
+                }
+            }
+        }
+
+        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+            val value = characteristic.getStringValue(0)
+            if (characteristic.uuid == CHAR_UUID_SENSOR) {
+                try {
+                    val tempMatch = Regex("\"temperature\":\\s*([0-9.]+)").find(value)
+                    val humMatch = Regex("\"humidity\":\\s*([0-9.]+)").find(value)
+                    val stateMatch = Regex("\"state\":\\s*\"([A-Z_]+)\"").find(value)
+                    val timeMatch = Regex("\"elapsedSeconds\":\\s*([0-9]+)").find(value)
+
+                    tempMatch?.groupValues?.get(1)?.toFloatOrNull()?.let { _temperature.value = it }
+                    humMatch?.groupValues?.get(1)?.toFloatOrNull()?.let { _humidity.value = it }
+                    timeMatch?.groupValues?.get(1)?.toLongOrNull()?.let { _dryingDurationSeconds.value = it }
+                    
+                    stateMatch?.groupValues?.get(1)?.let { state ->
+                        _deviceStatus.value = when (state) {
+                            "DRYING" -> DeviceStatus.DRYING
+                            "STOPPED" -> DeviceStatus.STOPPED
+                            "COMPLETED" -> DeviceStatus.COMPLETED
+                            "ERROR" -> DeviceStatus.ERROR
+                            else -> DeviceStatus.READY
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("BLE", "JSON parse error", e)
+                }
+            }
+        }
+    }
+}
