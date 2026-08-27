@@ -10,9 +10,9 @@ public class DryingBatchEntity {
     public long startTime;
     public Long endTime;
     public long durationSeconds;
-    public float startTemperature;
+    public Float startTemperature;
     public Float endTemperature;
-    public float startHumidity;
+    public Float startHumidity;
     public Float endHumidity;
     public String status; // "COMPLETED" or "STOPPED"
 }

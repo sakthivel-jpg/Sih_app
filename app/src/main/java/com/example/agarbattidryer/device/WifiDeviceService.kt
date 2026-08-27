@@ -1,20 +1,27 @@
 package com.example.agarbattidryer.device
 
+import android.content.Context
 import android.util.Log
 import com.example.agarbattidryer.data.model.ConnectionState
 import com.example.agarbattidryer.data.model.DeviceInfo
 import com.example.agarbattidryer.data.model.DeviceStatus
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.concurrent.thread
 
-class WifiDeviceService : DeviceService {
+class WifiDeviceService(context: Context) : DeviceService {
+
+    private val prefs = context.getSharedPreferences("wifi_device_prefs", Context.MODE_PRIVATE)
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     override val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -22,11 +29,11 @@ class WifiDeviceService : DeviceService {
     private val _deviceStatus = MutableStateFlow(DeviceStatus.READY)
     override val deviceStatus: StateFlow<DeviceStatus> = _deviceStatus.asStateFlow()
 
-    private val _temperature = MutableStateFlow(0.0f)
-    override val temperature: StateFlow<Float> = _temperature.asStateFlow()
+    private val _temperature = MutableStateFlow<Float?>(null)
+    override val temperature: StateFlow<Float?> = _temperature.asStateFlow()
 
-    private val _humidity = MutableStateFlow(0.0f)
-    override val humidity: StateFlow<Float> = _humidity.asStateFlow()
+    private val _humidity = MutableStateFlow<Float?>(null)
+    override val humidity: StateFlow<Float?> = _humidity.asStateFlow()
 
     private val _dryingDurationSeconds = MutableStateFlow(0L)
     override val dryingDurationSeconds: StateFlow<Long> = _dryingDurationSeconds.asStateFlow()
@@ -35,80 +42,208 @@ class WifiDeviceService : DeviceService {
     override val activeDevice: StateFlow<DeviceInfo?> = _activeDevice.asStateFlow()
     
     private var isPolling = false
+    private var pollingJob: Job? = null
     private var deviceIp = ""
+    private var devicePort = "80"
+    
+    private val scope = CoroutineScope(Dispatchers.IO)
+
+    init {
+        // Restore active device on startup
+        val savedIp = prefs.getString("ip", null)
+        val savedPort = prefs.getString("port", "80")
+        if (savedIp != null) {
+            deviceIp = savedIp
+            devicePort = savedPort ?: "80"
+            _activeDevice.value = DeviceInfo(deviceIp, "AGARBATTI-DRYER-01")
+            _connectionState.value = ConnectionState.RECONNECTING
+            startPolling()
+        }
+    }
 
     override suspend fun connect(deviceId: String): Boolean {
-        // deviceId is expected to be IP address in this context
-        deviceIp = deviceId
+        val parts = deviceId.split(":")
+        deviceIp = parts.getOrNull(0) ?: ""
+        devicePort = parts.getOrNull(1) ?: "80"
+        
         _connectionState.value = ConnectionState.CONNECTING
         
         return withContext(Dispatchers.IO) {
             try {
-                val response = getRequest("http://$deviceIp/api/status")
-                if (response.isNotEmpty()) {
-                    _connectionState.value = ConnectionState.CONNECTED
-                    _activeDevice.value = DeviceInfo(deviceIp, "ESP32-WIFI")
-                    startPolling()
-                    true
-                } else {
-                    _connectionState.value = ConnectionState.DISCONNECTED
-                    false
+                // Initial explicit connect attempt
+                val healthResponse = getRequest("http://$deviceIp:$devicePort/health")
+                if (healthResponse.isNotEmpty()) {
+                    val json = JSONObject(healthResponse)
+                    if (json.optString("status") == "OK") {
+                        val deviceName = json.optString("device", "ESP32-WIFI")
+                        
+                        // Save to prefs
+                        prefs.edit()
+                            .putString("ip", deviceIp)
+                            .putString("port", devicePort)
+                            .apply()
+                            
+                        _connectionState.value = ConnectionState.CONNECTED
+                        _activeDevice.value = DeviceInfo(deviceIp, deviceName)
+                        startPolling()
+                        return@withContext true
+                    }
                 }
+                
+                // If explicit connect fails, clear prefs so we don't auto-reconnect
+                handleUserDisconnection()
+                false
             } catch (e: Exception) {
-                _connectionState.value = ConnectionState.DISCONNECTED
+                Log.e("WiFi", "Connect error", e)
+                handleUserDisconnection()
                 false
             }
         }
     }
 
     override suspend fun disconnect() {
-        isPolling = false
+        // Explicit user disconnect
+        handleUserDisconnection()
+    }
+
+    private fun handleUserDisconnection() {
+        stopPolling()
+        timerJob?.cancel()
+        timerJob = null
+        prefs.edit().clear().apply()
+        
         _connectionState.value = ConnectionState.DISCONNECTED
         _activeDevice.value = null
+        _temperature.value = null
+        _humidity.value = null
+        _dryingDurationSeconds.value = 0L
     }
 
     override suspend fun startDrying(): Boolean {
-        return postRequest("http://$deviceIp/api/start")
+        return withContext(Dispatchers.IO) {
+            val response = postRequest("http://$deviceIp:$devicePort/drying/start")
+            if (response.isNotEmpty()) {
+                try {
+                    val json = JSONObject(response)
+                    if (json.optBoolean("success", false)) {
+                        updateStatusFromJson(json.optString("status", ""))
+                        true
+                    } else false
+                } catch (e: Exception) {
+                    false
+                }
+            } else false
+        }
     }
 
     override suspend fun stopDrying(): Boolean {
-        return postRequest("http://$deviceIp/api/stop")
+        return withContext(Dispatchers.IO) {
+            val response = postRequest("http://$deviceIp:$devicePort/drying/stop")
+            if (response.isNotEmpty()) {
+                try {
+                    val json = JSONObject(response)
+                    if (json.optBoolean("success", false)) {
+                        updateStatusFromJson(json.optString("status", ""))
+                        true
+                    } else false
+                } catch (e: Exception) {
+                    false
+                }
+            } else false
+        }
     }
 
     override suspend fun getAvailableDevices(): List<DeviceInfo> {
-        return listOf(DeviceInfo("192.168.4.1", "Local ESP32"))
+        return emptyList() // Manual IP entry only
+    }
+
+    private var timerJob: Job? = null
+
+    private fun updateStatusFromJson(state: String) {
+        val newStatus = when (state) {
+            "DRYING" -> DeviceStatus.DRYING
+            "STOPPED" -> DeviceStatus.STOPPED
+            "COMPLETED" -> DeviceStatus.COMPLETED
+            "ERROR" -> DeviceStatus.ERROR
+            else -> DeviceStatus.READY
+        }
+        
+        if (newStatus == DeviceStatus.DRYING) {
+            if (timerJob == null) {
+                var startTime = prefs.getLong("drying_start_time", 0L)
+                if (startTime == 0L) {
+                    startTime = System.currentTimeMillis()
+                    prefs.edit().putLong("drying_start_time", startTime).apply()
+                }
+                
+                timerJob = scope.launch {
+                    while (true) {
+                        val elapsedMillis = System.currentTimeMillis() - startTime
+                        _dryingDurationSeconds.value = elapsedMillis / 1000
+                        delay(1000)
+                    }
+                }
+            }
+        } else {
+            timerJob?.cancel()
+            timerJob = null
+            prefs.edit().remove("drying_start_time").apply()
+            // Leave _dryingDurationSeconds.value as is, so the final duration remains visible
+        }
+
+        _deviceStatus.value = newStatus
+    }
+
+    private fun stopPolling() {
+        isPolling = false
+        pollingJob?.cancel()
+        pollingJob = null
     }
 
     private fun startPolling() {
+        // Prevent duplicate polling loops
+        if (isPolling) return
+        
         isPolling = true
-        thread {
+        pollingJob = scope.launch {
             while (isPolling) {
                 try {
-                    val json = getRequest("http://$deviceIp/api/sensor")
-                    val tempMatch = Regex("\"temperature\":\\s*([0-9.]+)").find(json)
-                    val humMatch = Regex("\"humidity\":\\s*([0-9.]+)").find(json)
-                    val stateMatch = Regex("\"state\":\\s*\"([A-Z_]+)\"").find(json)
-                    val timeMatch = Regex("\"elapsedSeconds\":\\s*([0-9]+)").find(json)
-
-                    tempMatch?.groupValues?.get(1)?.toFloatOrNull()?.let { _temperature.value = it }
-                    humMatch?.groupValues?.get(1)?.toFloatOrNull()?.let { _humidity.value = it }
-                    timeMatch?.groupValues?.get(1)?.toLongOrNull()?.let { _dryingDurationSeconds.value = it }
-                    
-                    stateMatch?.groupValues?.get(1)?.let { state ->
-                        _deviceStatus.value = when (state) {
-                            "DRYING" -> DeviceStatus.DRYING
-                            "STOPPED" -> DeviceStatus.STOPPED
-                            "COMPLETED" -> DeviceStatus.COMPLETED
-                            "ERROR" -> DeviceStatus.ERROR
-                            else -> DeviceStatus.READY
+                    val jsonString = getRequest("http://$deviceIp:$devicePort/status")
+                    if (jsonString.isEmpty()) {
+                        handleNetworkFailure()
+                    } else {
+                        val json = JSONObject(jsonString)
+                        
+                        _connectionState.value = ConnectionState.CONNECTED
+                        
+                        if (json.isNull("temperature")) {
+                            _temperature.value = null
+                        } else {
+                            _temperature.value = json.optDouble("temperature").toFloat()
                         }
+
+                        if (json.isNull("humidity")) {
+                            _humidity.value = null
+                        } else {
+                            _humidity.value = json.optDouble("humidity").toFloat()
+                        }
+                        
+                        updateStatusFromJson(json.optString("status", "READY"))
                     }
                 } catch (e: Exception) {
                     Log.e("WiFi", "Polling error", e)
+                    handleNetworkFailure()
                 }
-                Thread.sleep(2000)
+                delay(2000)
             }
         }
+    }
+    
+    private fun handleNetworkFailure() {
+        // Do not clear prefs. Set state to RECONNECTING.
+        _connectionState.value = ConnectionState.RECONNECTING
+        _temperature.value = null
+        _humidity.value = null
     }
 
     private fun getRequest(urlString: String): String {
@@ -118,23 +253,33 @@ class WifiDeviceService : DeviceService {
             connection.requestMethod = "GET"
             connection.connectTimeout = 3000
             connection.readTimeout = 3000
-            connection.inputStream.bufferedReader().use { it.readText() }
+            val responseCode = connection.responseCode
+            if (responseCode == 200) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                ""
+            }
         } catch (e: Exception) {
             ""
         }
     }
 
-    private fun postRequest(urlString: String): Boolean {
+    private fun postRequest(urlString: String): String {
         return try {
             val url = URL(urlString)
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
             connection.connectTimeout = 3000
             connection.readTimeout = 3000
+            connection.setRequestProperty("Content-Length", "0")
             val responseCode = connection.responseCode
-            responseCode == 200
+            if (responseCode == 200) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                ""
+            }
         } catch (e: Exception) {
-            false
+            ""
         }
     }
 }

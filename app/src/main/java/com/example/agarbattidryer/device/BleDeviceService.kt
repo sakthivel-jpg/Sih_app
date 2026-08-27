@@ -1,5 +1,9 @@
 package com.example.agarbattidryer.device
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.content.Context
@@ -17,8 +21,8 @@ import java.util.UUID
 @SuppressLint("MissingPermission")
 class BleDeviceService(private val context: Context) : DeviceService {
 
-    private val SERVICE_UUID = UUID.fromString("7b7a0001-7b7a-4f8a-9a10-000000000001")
-    private val CHAR_UUID_STATUS = UUID.fromString("7b7a0002-7b7a-4f8a-9a10-000000000002")
+    private val SERVICE_UUID = UUID.fromString("4fafc201-1fb5-459e-8fcc-c5c9c331914b")
+    private val CHAR_UUID_STATUS = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a7")
     private val CHAR_UUID_SENSOR = UUID.fromString("7b7a0003-7b7a-4f8a-9a10-000000000003")
     private val CHAR_UUID_COMMAND = UUID.fromString("7b7a0004-7b7a-4f8a-9a10-000000000004")
     private val CHAR_UUID_CONFIG = UUID.fromString("7b7a0005-7b7a-4f8a-9a10-000000000005")
@@ -29,11 +33,11 @@ class BleDeviceService(private val context: Context) : DeviceService {
     private val _deviceStatus = MutableStateFlow(DeviceStatus.READY)
     override val deviceStatus: StateFlow<DeviceStatus> = _deviceStatus.asStateFlow()
 
-    private val _temperature = MutableStateFlow(0.0f)
-    override val temperature: StateFlow<Float> = _temperature.asStateFlow()
+    private val _temperature = MutableStateFlow<Float?>(null)
+    override val temperature: StateFlow<Float?> = _temperature.asStateFlow()
 
-    private val _humidity = MutableStateFlow(0.0f)
-    override val humidity: StateFlow<Float> = _humidity.asStateFlow()
+    private val _humidity = MutableStateFlow<Float?>(null)
+    override val humidity: StateFlow<Float?> = _humidity.asStateFlow()
 
     private val _dryingDurationSeconds = MutableStateFlow(0L)
     override val dryingDurationSeconds: StateFlow<Long> = _dryingDurationSeconds.asStateFlow()
@@ -48,6 +52,13 @@ class BleDeviceService(private val context: Context) : DeviceService {
     private var cmdCharacteristic: BluetoothGattCharacteristic? = null
 
     override suspend fun connect(deviceId: String): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+        ) {
+            _connectionState.value = ConnectionState.DISCONNECTED
+            return false
+        }
+
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) return false
         
         _connectionState.value = ConnectionState.CONNECTING
@@ -58,11 +69,19 @@ class BleDeviceService(private val context: Context) : DeviceService {
     }
 
     override suspend fun disconnect() {
-        bluetoothGatt?.disconnect()
-        bluetoothGatt?.close()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+        ) {
+            // Already lack permission, just clear local state
+        } else {
+            bluetoothGatt?.disconnect()
+            bluetoothGatt?.close()
+        }
         bluetoothGatt = null
         _connectionState.value = ConnectionState.DISCONNECTED
         _activeDevice.value = null
+        _temperature.value = null
+        _humidity.value = null
     }
 
     override suspend fun startDrying(): Boolean {
@@ -74,6 +93,11 @@ class BleDeviceService(private val context: Context) : DeviceService {
     }
     
     private fun sendCommand(cmd: String): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return false
+        }
         val gatt = bluetoothGatt ?: return false
         val char = cmdCharacteristic ?: return false
         char.value = cmd.toByteArray()
@@ -81,18 +105,30 @@ class BleDeviceService(private val context: Context) : DeviceService {
     }
 
     override suspend fun getAvailableDevices(): List<DeviceInfo> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return emptyList()
+        }
         return listOf(DeviceInfo("00:11:22:33:44:55", "AGARBATTI-DRYER-01"))
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    return
+                }
                 _connectionState.value = ConnectionState.CONNECTED
                 _activeDevice.value = DeviceInfo(gatt.device.address, gatt.device.name ?: "Unknown")
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 _connectionState.value = ConnectionState.DISCONNECTED
                 _deviceStatus.value = DeviceStatus.ERROR
+                _temperature.value = null
+                _humidity.value = null
             }
         }
 
@@ -106,6 +142,11 @@ class BleDeviceService(private val context: Context) : DeviceService {
                     
                     // Enable notifications
                     sensorChar?.let {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            return
+                        }
                         gatt.setCharacteristicNotification(it, true)
                         val descriptor = it.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
                         if (descriptor != null) {

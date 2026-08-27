@@ -19,9 +19,7 @@ class DefaultAppContainer(private val context: android.content.Context) : AppCon
 
     override val deviceService: com.example.agarbattidryer.device.DynamicDeviceService by lazy {
         com.example.agarbattidryer.device.DynamicDeviceService(
-            com.example.agarbattidryer.device.MockDeviceService(),
-            com.example.agarbattidryer.device.BleDeviceService(context),
-            com.example.agarbattidryer.device.WifiDeviceService()
+            com.example.agarbattidryer.device.WifiDeviceService(context)
         )
     }
 

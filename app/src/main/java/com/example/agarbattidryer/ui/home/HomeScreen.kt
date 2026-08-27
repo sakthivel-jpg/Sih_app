@@ -133,11 +133,11 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (uiState.connectionState == com.example.agarbattidryer.data.model.ConnectionState.CONNECTED) {
+            if (uiState.activeDeviceName != null || uiState.connectionState == com.example.agarbattidryer.data.model.ConnectionState.CONNECTED) {
                 // Large Action Button: START DRYING / STOP DRYING
                 BigActionButton(
                     isDrying = uiState.isDrying,
-                    enabled = if (uiState.isDrying) uiState.canStop else uiState.canStart,
+                    enabled = if (uiState.isDrying) uiState.canStop else (uiState.canStart && uiState.connectionState == com.example.agarbattidryer.data.model.ConnectionState.CONNECTED),
                     onClick = {
                         if (uiState.isDrying) {
                             viewModel.onStopDrying()
@@ -164,8 +164,22 @@ fun HomeScreen(
             ConnectionStatusBar(
                 connectionState = uiState.connectionState,
                 deviceName = uiState.activeDeviceName,
-                modifier = Modifier.padding(top = 12.dp, bottom = 8.dp)
+                modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
             )
+
+            if (uiState.activeDeviceName != null || uiState.connectionState == com.example.agarbattidryer.data.model.ConnectionState.CONNECTED) {
+                androidx.compose.material3.TextButton(
+                    onClick = onConnectDeviceClick,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    Text(
+                        "MANAGE DEVICE",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
         }
     }
 }

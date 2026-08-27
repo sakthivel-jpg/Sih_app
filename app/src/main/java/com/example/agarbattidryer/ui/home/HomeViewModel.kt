@@ -143,8 +143,8 @@ class HomeViewModel(
 private data class DeviceTelemetry(
     val status: DeviceStatus,
     val connection: ConnectionState,
-    val temperature: Float,
-    val humidity: Float
+    val temperature: Float?,
+    val humidity: Float?
 )
 
 private data class DeviceSession(

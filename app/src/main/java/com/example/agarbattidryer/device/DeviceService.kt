@@ -13,8 +13,8 @@ import kotlinx.coroutines.flow.StateFlow
 interface DeviceService {
     val connectionState: StateFlow<ConnectionState>
     val deviceStatus: StateFlow<DeviceStatus>
-    val temperature: StateFlow<Float>
-    val humidity: StateFlow<Float>
+    val temperature: StateFlow<Float?>
+    val humidity: StateFlow<Float?>
     val dryingDurationSeconds: StateFlow<Long>
     val activeDevice: StateFlow<DeviceInfo?>
 

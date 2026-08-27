@@ -7,7 +7,8 @@ enum class ConnectionState {
     DISCONNECTED,
     SEARCHING,
     CONNECTING,
-    CONNECTED;
+    CONNECTED,
+    RECONNECTING;
 
     val displayLabel: String
         get() = when (this) {
@@ -15,5 +16,6 @@ enum class ConnectionState {
             SEARCHING -> "Searching..."
             CONNECTING -> "Connecting..."
             CONNECTED -> "Connected"
+            RECONNECTING -> "Reconnecting..."
         }
 }

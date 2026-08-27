@@ -40,11 +40,11 @@ class MockDeviceService(
     private val _deviceStatus = MutableStateFlow(DeviceStatus.READY)
     override val deviceStatus: StateFlow<DeviceStatus> = _deviceStatus.asStateFlow()
 
-    private val _temperature = MutableStateFlow(32.0f)
-    override val temperature: StateFlow<Float> = _temperature.asStateFlow()
+    private val _temperature = MutableStateFlow<Float?>(null)
+    override val temperature: StateFlow<Float?> = _temperature.asStateFlow()
 
-    private val _humidity = MutableStateFlow(58.0f)
-    override val humidity: StateFlow<Float> = _humidity.asStateFlow()
+    private val _humidity = MutableStateFlow<Float?>(null)
+    override val humidity: StateFlow<Float?> = _humidity.asStateFlow()
 
     private val _dryingDurationSeconds = MutableStateFlow(0L)
     override val dryingDurationSeconds: StateFlow<Long> = _dryingDurationSeconds.asStateFlow()
@@ -71,13 +71,13 @@ class MockDeviceService(
                 if (isDrying) {
                     // During drying: chamber heats up slightly and humidity drops progressively
                     val targetTemp = 33.5f + (step % 5) * 0.2f + (Random.nextFloat() * 0.2f - 0.1f)
-                    val currentTemp = _temperature.value
+                    val currentTemp = _temperature.value ?: 32.0f
                     _temperature.value = (currentTemp * 0.85f + targetTemp * 0.15f)
                         .coerceIn(31.5f, 36.0f)
                         .roundTo1Decimal()
 
                     val targetHumidity = (58.0f - (step * 0.15f)).coerceAtLeast(42.0f) + (Random.nextFloat() * 0.4f - 0.2f)
-                    val currentHumidity = _humidity.value
+                    val currentHumidity = _humidity.value ?: 58.0f
                     _humidity.value = (currentHumidity * 0.85f + targetHumidity * 0.15f)
                         .coerceIn(40.0f, 65.0f)
                         .roundTo1Decimal()
@@ -107,6 +107,8 @@ class MockDeviceService(
         _connectionState.value = ConnectionState.DISCONNECTED
         _activeDevice.value = null
         _deviceStatus.value = DeviceStatus.DISCONNECTED
+        _temperature.value = null
+        _humidity.value = null
     }
 
     override suspend fun startDrying(): Boolean {

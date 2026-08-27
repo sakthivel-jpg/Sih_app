@@ -14,8 +14,8 @@ class DryingHistoryRepository(private val dao: DryingBatchDao) {
     suspend fun startBatch(
         startTime: Long,
         durationSeconds: Long,
-        startTemperature: Float,
-        startHumidity: Float
+        startTemperature: Float?,
+        startHumidity: Float?
     ): Long = withContext(Dispatchers.IO) {
         val batch = DryingBatchEntity().apply {
             this.startTime = startTime
@@ -34,8 +34,8 @@ class DryingHistoryRepository(private val dao: DryingBatchDao) {
         batchId: Long,
         endTime: Long,
         durationSeconds: Long,
-        endTemperature: Float,
-        endHumidity: Float,
+        endTemperature: Float?,
+        endHumidity: Float?,
         status: String
     ) = withContext(Dispatchers.IO) {
         val batch = dao.getBatchById(batchId)

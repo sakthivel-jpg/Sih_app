@@ -19,8 +19,8 @@ class DeviceRepositoryImpl(
 
     override val connectionState: StateFlow<ConnectionState> = deviceService.connectionState
     override val deviceStatus: StateFlow<DeviceStatus> = deviceService.deviceStatus
-    override val temperature: StateFlow<Float> = deviceService.temperature
-    override val humidity: StateFlow<Float> = deviceService.humidity
+    override val temperature: StateFlow<Float?> = deviceService.temperature
+    override val humidity: StateFlow<Float?> = deviceService.humidity
     override val dryingDurationSeconds: StateFlow<Long> = deviceService.dryingDurationSeconds
     override val activeDevice: StateFlow<DeviceInfo?> = deviceService.activeDevice
 
