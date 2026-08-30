@@ -1,5 +1,7 @@
 package com.example.agarbattidryer.navigation
 
+import kotlinx.coroutines.launch
+
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -133,6 +135,44 @@ fun AppNavHost(
                     }
                 )
 
+                val qrSelected = currentRoute == Screen.QrMain.route || currentRoute == Screen.QrScanner.route || currentRoute.startsWith("wifi_provisioning")
+                NavigationBarItem(
+                    icon = {
+                        Icon(
+                            imageVector = Screen.QrMain.icon,
+                            contentDescription = Screen.QrMain.title,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    },
+                    label = {
+                        Text(
+                            text = Screen.QrMain.title,
+                            fontSize = 13.sp,
+                            fontWeight = if (qrSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                            letterSpacing = 1.sp
+                        )
+                    },
+                    selected = qrSelected,
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = SolarAmber,
+                        selectedTextColor = SolarAmber,
+                        indicatorColor = SolarWarm,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    onClick = {
+                        if (currentRoute != Screen.QrMain.route) {
+                            navController.navigate(Screen.QrMain.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
+                    }
+                )
+
                 val moreSelected = currentRoute == Screen.More.route
                 NavigationBarItem(
                     icon = {
@@ -194,6 +234,43 @@ fun AppNavHost(
                 // Just use the dynamic device service here
                 com.example.agarbattidryer.ui.device.ConnectDeviceScreen(
                     deviceService = (deviceRepository as com.example.agarbattidryer.data.repository.DeviceRepositoryImpl).getDynamicService(),
+                    onBack = { navController.popBackStack() },
+                    onScanQrCode = { navController.navigate(Screen.QrScanner.route) }
+                )
+            }
+
+            composable(Screen.QrMain.route) {
+                com.example.agarbattidryer.ui.qr.QrScreen(
+                    onScanClick = { navController.navigate(Screen.QrScanner.route) }
+                )
+            }
+
+            composable(Screen.QrScanner.route) {
+                com.example.agarbattidryer.ui.device.QrScannerScreen(
+                    onDeviceIdentified = { identity ->
+                        navController.navigate(Screen.WifiProvisioning.createRoute(identity.deviceId)) {
+                            popUpTo(Screen.QrMain.route) { inclusive = false }
+                        }
+                    },
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(Screen.WifiProvisioning.route) { backStackEntry ->
+                val deviceId = backStackEntry.arguments?.getString("deviceId") ?: ""
+                com.example.agarbattidryer.ui.device.WifiProvisioningScreen(
+                    deviceIdentity = com.example.agarbattidryer.data.model.DeviceIdentity(deviceId, null),
+                    onProvisioned = { ip, port ->
+                        // Connect the device service to the new IP
+                        val service = (deviceRepository as com.example.agarbattidryer.data.repository.DeviceRepositoryImpl).getDynamicService()
+                        navController.navigate(Screen.Home.route) {
+                            popUpTo(Screen.Home.route) { inclusive = true }
+                        }
+                        // Connect to it in background (or pass to service)
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                            service.connect("$ip:$port")
+                        }
+                    },
                     onBack = { navController.popBackStack() }
                 )
             }

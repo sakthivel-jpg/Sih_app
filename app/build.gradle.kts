@@ -96,4 +96,14 @@ dependencies {
   // Firebase
   implementation(platform(libs.firebase.bom))
   implementation(libs.firebase.auth)
+
+  // CameraX
+  val cameraxVersion = "1.3.1"
+  implementation("androidx.camera:camera-core:$cameraxVersion")
+  implementation("androidx.camera:camera-camera2:$cameraxVersion")
+  implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+  implementation("androidx.camera:camera-view:$cameraxVersion")
+
+  // ML Kit Barcode Scanning
+  implementation("com.google.mlkit:barcode-scanning:17.2.0")
 }

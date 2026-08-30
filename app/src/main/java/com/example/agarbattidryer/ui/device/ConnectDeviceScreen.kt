@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 fun ConnectDeviceScreen(
     deviceService: DynamicDeviceService,
     onBack: () -> Unit,
+    onScanQrCode: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -105,6 +106,24 @@ fun ConnectDeviceScreen(
                     }
                 }
             } else {
+                Button(
+                    onClick = { onScanQrCode?.invoke() },
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Text("SCAN DRYER QR", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+
+                Spacer(modifier = Modifier.height(32.dp))
+                
+                Text(
+                    text = "ADVANCED / MANUAL SETUP",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
                 OutlinedTextField(
                     value = wifiIp,
                     onValueChange = { wifiIp = it },
@@ -120,7 +139,7 @@ fun ConnectDeviceScreen(
                     enabled = true
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                Button(
+                OutlinedButton(
                     onClick = {
                         coroutineScope.launch {
                             deviceService.connect("$wifiIp:$wifiPort")
@@ -128,7 +147,7 @@ fun ConnectDeviceScreen(
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(if (connectionState == ConnectionState.CONNECTING) "CONNECTING..." else "CONNECT")
+                    Text(if (connectionState == ConnectionState.CONNECTING) "CONNECTING..." else "CONNECT MANUALLY")
                 }
             }
             
